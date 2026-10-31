@@ -27717,6 +27717,13 @@ def _build_external_messages(
                                 "image_url": {"url": part.image_url.url},
                             }
                         )
+                    elif part.type == "video_url":
+                        parts.append(
+                            {
+                                "type": "video_url",
+                                "video_url": {"url": part.video_url.url},
+                            }
+                        )
                     elif (
                         responses_native_parts
                         and msg.role == "assistant"
@@ -30435,9 +30442,40 @@ async def produce_openai_chat_completions(
         untrack_current_request(request.scope)
         if _wants_multiple_choices(payload):
             _raise_unsupported_n("external provider chat completions")
-        # Refuse video here: the proxy cannot place a clip, and video_url is refused as the legacy field is.
+        # Video: OpenAI-compatible endpoints may take the video_url Chat Completions
+        # extension (e.g. NInfer); native Anthropic/Gemini have no video part to forward.
         if _request_has_video(payload):
-            raise HTTPException(status_code = 400, detail = _VIDEO_INPUT_REFUSAL)
+            _video_pt = payload.provider_type
+            if not _video_pt and payload.provider_id:
+                _video_cfg = await asyncio.to_thread(
+                    providers_db.get_provider, payload.provider_id
+                )
+                _video_pt = (_video_cfg or {}).get("provider_type")
+            _video_info = get_provider_info(_video_pt) or {}
+            if not _video_info.get("openai_compatible", True):
+                raise HTTPException(status_code = 400, detail = _VIDEO_INPUT_REFUSAL)
+            # Lift the legacy video_base64 field onto the latest user turn as a video_url part,
+            # which _build_external_messages forwards in the OpenAI shape.
+            if payload.video_base64:
+                _video_b64 = _video_b64_rejection(payload.video_base64)[0]
+                for _m in reversed(payload.messages):
+                    if _m.role == "user":
+                        _video_part = VideoContentPart(
+                            type = "video_url",
+                            video_url = {"url": f"data:video/mp4;base64,{_video_b64}"},
+                        )
+                        if isinstance(_m.content, list):
+                            if not any(
+                                getattr(_p, "type", None) == "video_url" for _p in _m.content
+                            ):
+                                _m.content.append(_video_part)
+                        else:
+                            _m.content = [
+                                TextContentPart(type = "text", text = _m.content or ""),
+                                _video_part,
+                            ]
+                        break
+                payload.video_base64 = None
         # _build_external_messages has no input_audio case; refuse rather than drop it.
         if _messages_have_input_audio(payload.messages):
             raise HTTPException(

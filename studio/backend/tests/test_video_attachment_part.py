@@ -144,15 +144,32 @@ def test_video_joins_the_projector_requirement_before_switching():
     assert start < source.index("_request_has_video(payload)", start) < switch
 
 
-def test_an_external_provider_refuses_video_rather_than_ignoring_it():
-    """input_video is llama.cpp's own part type, so the proxy has nowhere to put
-    the clip and returns before any video handling below."""
+def test_an_external_provider_refuses_native_video_rather_than_ignoring_it():
+    """Native Anthropic/Gemini have no video part to forward, so the proxy refuses them
+    before any proxy call; OpenAI-compatible endpoints take the video_url extension."""
     source = _inference_source()
     start = source.index("if payload.provider_id or payload.provider_type:")
     branch = source[start : source.index("_proxy_to_external_provider(payload", start)]
     # Both spellings through one predicate, so a video_url part cannot reach the proxy either.
     assert "_request_has_video(payload)" in branch
+    # Native (non-OpenAI-compatible) providers are still refused...
     assert "_VIDEO_INPUT_REFUSAL" in branch
+    assert 'not _video_info.get("openai_compatible", True)' in branch
+    # ...and the legacy field is lifted onto the newest user turn as a video_url part.
+    assert "VideoContentPart" in branch
+    assert "payload.video_base64 = None" in branch
+
+
+def test_external_messages_forward_a_video_url_part():
+    """OpenAI-compatible providers take the video_url part in the OpenAI shape."""
+    from routes.inference import _build_external_messages
+
+    req = _video_url_request("data:video/mp4;base64,QUJD")
+    messages = _build_external_messages(req.messages, True, provider_type = "custom")
+    assert {
+        "type": "video_url",
+        "video_url": {"url": "data:video/mp4;base64,QUJD"},
+    } in messages[0]["content"]
 
 
 def _model_info(**fields):

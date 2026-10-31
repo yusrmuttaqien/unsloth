@@ -432,14 +432,70 @@ def test_a_data_uri_with_no_payload_is_refused(monkeypatch):
 
 
 @pytest.mark.parametrize("body", [_part_body(_DATA_URI), _field_body()])
-def test_an_external_provider_refuses_either_spelling(monkeypatch, body):
-    """_build_external_messages rebuilds from an allowlist, so a clip left standing is dropped
-    and the provider answers a prompt the caller did not send."""
-    body = {**body, "provider_type": "openai", "provider_api_key": "sk-test"}
+def test_a_native_external_provider_refuses_either_spelling(monkeypatch, body):
+    """Native Anthropic has no video part to forward, so the proxy refuses before any
+    proxy call; OpenAI-compatible endpoints take the video_url extension instead."""
+    body = {**body, "provider_type": "anthropic", "provider_api_key": "sk-test"}
     with _client(monkeypatch, _VideoGguf()) as client:
         response = client.post("/v1/chat/completions", json = body)
     assert response.status_code == 400
     assert response.json()["detail"] == inference_route._VIDEO_INPUT_REFUSAL
+
+
+@pytest.mark.parametrize("body", [_part_body(_DATA_URI), _field_body()])
+def test_an_openai_compatible_provider_forwards_either_spelling(monkeypatch, body):
+    """OpenAI-compatible endpoints take the video_url Chat Completions extension, so the
+    clip is forwarded instead of refused. The legacy field is lifted onto the newest user
+    turn as a video_url part; a part spelling is left in place."""
+    from fastapi.responses import JSONResponse
+
+    captured = {}
+
+    async def _capture(payload, request, subject, **kw):
+        captured["payload"] = payload
+        return JSONResponse({"ok": True})
+
+    monkeypatch.setattr(inference_route, "_proxy_to_external_provider", _capture)
+    body = {**body, "provider_type": "custom"}
+    with _client(monkeypatch, _VideoGguf()) as client:
+        response = client.post("/v1/chat/completions", json = body)
+    assert response.status_code == 200
+    payload = captured["payload"]
+    newest = next(
+        m for m in reversed(payload.messages) if m.role == "user" and isinstance(m.content, list)
+    )
+    assert any(
+        getattr(p, "type", None) == "video_url" for p in newest.content
+    ), "the clip must ride the newest user turn as a video_url part"
+    # The legacy field is consumed once lifted, so it is not forwarded twice.
+    assert payload.video_base64 is None
+
+
+def test_an_openai_compatible_provider_lifts_the_field_onto_a_string_turn(monkeypatch):
+    """A bare string turn is promoted to parts so the lifted clip has a home, mirroring
+    _inject_video_part on the local path."""
+    from fastapi.responses import JSONResponse
+
+    captured = {}
+
+    async def _capture(payload, request, subject, **kw):
+        captured["payload"] = payload
+        return JSONResponse({"ok": True})
+
+    monkeypatch.setattr(inference_route, "_proxy_to_external_provider", _capture)
+    body = {
+        "model": "test/model.gguf",
+        "stream": False,
+        "messages": [{"role": "user", "content": "describe the clip"}],
+        "video_base64": _DATA_URI,
+        "provider_type": "custom",
+    }
+    with _client(monkeypatch, _VideoGguf()) as client:
+        response = client.post("/v1/chat/completions", json = body)
+    assert response.status_code == 200
+    content = captured["payload"].messages[0].content
+    assert content[0].type == "text" and content[0].text == "describe the clip"
+    assert content[1].type == "video_url"
 
 
 @pytest.mark.parametrize("body", [_part_body(_DATA_URI), _field_body()])
