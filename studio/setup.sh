@@ -4589,7 +4589,14 @@ if [ "$_LOCAL_LLAMA_CPP_LINKED" != true ]; then
     fi
 fi
 
-if [ "$_LOCAL_LLAMA_CPP_LINKED" = true ]; then
+# UNSLOTH_SKIP_LLAMA_CPP=1: skip the llama.cpp install entirely. External
+# OpenAI-compatible providers (and any non-GGUF backend) don't need a local
+# llama-server; mark the install "degraded" so setup proceeds without one.
+if [ "${UNSLOTH_SKIP_LLAMA_CPP:-0}" = "1" ]; then
+    step "llama.cpp" "UNSLOTH_SKIP_LLAMA_CPP=1 -- skipping install" "$C_WARN"
+    _NEED_LLAMA_SOURCE_BUILD=false
+    _LLAMA_CPP_DEGRADED=true
+elif [ "$_LOCAL_LLAMA_CPP_LINKED" = true ]; then
     : # local directory linked above; skip prebuilt install
 elif [ -n "$_explicit_llama_source_backend" ] && [ "$_NEED_LLAMA_SOURCE_BUILD" = true ]; then
     step "llama.cpp" "$_explicit_llama_source_backend was explicitly requested, but this installation requires a source build" "$C_ERR"
@@ -5324,6 +5331,7 @@ fi  # end _SKIP_GGUF_BUILD check
 # ── arm64 Linux GPU: CPU prebuilt as a last resort ──
 # Source build produced nothing: install the CPU prebuilt. Skipped on a full disk.
 if [ "$_LLAMA_CPP_DEGRADED" = true ] \
+        && [ "${UNSLOTH_SKIP_LLAMA_CPP:-0}" != "1" ] \
         && [ "$_LLAMA_CPP_NO_SPACE" != true ] \
         && [ "$_LLAMA_KEEP_PREBUILT_ACTIVE" != true ] \
         && [ "$_HOST_SYSTEM" = "Linux" ] \
