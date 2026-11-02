@@ -5566,7 +5566,7 @@ fi
 echo ""
 
 # From install.sh exit non-zero so it can report GGUF failure; `studio update` stays successful.
-if [ "$_LLAMA_CPP_DEGRADED" = true ] && [ "${SKIP_STUDIO_BASE:-0}" = "1" ]; then
+if [ "$_LLAMA_CPP_DEGRADED" = true ] && [ "${SKIP_STUDIO_BASE:-0}" = "1" ] && [ "${UNSLOTH_SKIP_LLAMA_CPP:-0}" != "1" ]; then
     # In Tauri mode a non-zero exit is not "report", it is "abort": install.rs turns the
     # error into "Installation failed", so one transient prebuilt download failure (a
     # single HTTP 403 rate limit will do it) fails the whole first-launch install of an
